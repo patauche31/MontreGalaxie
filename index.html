@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>🏊 PiscineTimer</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0d0d0d;
+      --card: #1a1a1a;
+      --border: #2a2a2a;
+      --blue: #4fc3f7;
+      --teal: #4db6ac;
+      --amber: #ffb74d;
+      --red: #ef5350;
+      --green: #66bb6a;
+      --text: #e0e0e0;
+      --muted: #757575;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: -apple-system, sans-serif; padding: 16px; max-width: 480px; margin: 0 auto; }
+    h1 { font-size: 1.3rem; color: var(--blue); margin-bottom: 4px; }
+    .subtitle { font-size: 0.85rem; color: var(--muted); margin-bottom: 20px; }
+
+    /* ── Carte session courante ── */
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+    .card-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 12px; }
+    .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+    .stat { text-align: center; }
+    .stat-val { font-size: 1.5rem; font-weight: 700; color: var(--blue); }
+    .stat-lbl { font-size: 0.75rem; color: var(--muted); margin-top: 2px; }
+    .stat-val.green { color: var(--green); }
+    .stat-val.amber { color: var(--amber); }
+    .stat-val.red   { color: var(--red); }
+
+    /* ── Graphique ── */
+    .chart-wrap { position: relative; height: 200px; }
+
+    /* ── Bouton Partager ── */
+    .btn-share { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 14px; border-radius: 10px; background: var(--blue); color: #000; font-size: 1rem; font-weight: 700; border: none; cursor: pointer; margin-bottom: 16px; }
+    .btn-share:active { opacity: 0.8; }
+
+    /* ── Historique ── */
+    .history-item { border-bottom: 1px solid var(--border); padding: 12px 0; cursor: pointer; }
+    .history-item:last-child { border-bottom: none; }
+    .history-row { display: flex; justify-content: space-between; align-items: baseline; }
+    .history-date { font-size: 0.85rem; color: var(--muted); }
+    .history-main { font-size: 1rem; font-weight: 600; color: var(--text); }
+    .history-sub  { font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
+    .history-badge { font-size: 0.75rem; background: var(--border); border-radius: 6px; padding: 2px 8px; color: var(--teal); }
+    .empty { text-align: center; color: var(--muted); padding: 24px; font-size: 0.9rem; }
+
+    /* ── Onglets ── */
+    .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+    .tab { flex: 1; padding: 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--muted); font-size: 0.85rem; text-align: center; cursor: pointer; }
+    .tab.active { background: var(--blue); color: #000; font-weight: 700; border-color: var(--blue); }
+
+    /* ── Bouton effacer ── */
+    .btn-clear { font-size: 0.75rem; color: var(--red); background: none; border: 1px solid var(--red); border-radius: 6px; padding: 4px 10px; cursor: pointer; float: right; }
+  </style>
+</head>
+<body>
+
+  <h1>🏊 PiscineTimer</h1>
+  <p class="subtitle" id="subtitle">Dashboard de nage</p>
+
+  <div class="tabs">
+    <div class="tab active" onclick="showTab('session')">Session</div>
+    <div class="tab" onclick="showTab('history')">Historique</div>
+  </div>
+
+  <!-- ── Tab Session ── -->
+  <div id="tab-session">
+    <div id="no-session" class="card empty" style="display:none">
+      📷 Scanne le QR Code sur la montre après ta séance pour voir les résultats ici.
+    </div>
+    <div id="session-content" style="display:none">
+      <div class="card">
+        <div class="card-title" id="session-title">Session</div>
+        <div class="stats-grid">
+          <div class="stat"><div class="stat-val" id="s-total">—</div><div class="stat-lbl">Durée totale</div></div>
+          <div class="stat"><div class="stat-val green" id="s-dist">—</div><div class="stat-lbl">Distance</div></div>
+          <div class="stat"><div class="stat-val" id="s-laps">—</div><div class="stat-lbl">Longueurs</div></div>
+          <div class="stat"><div class="stat-val" id="s-avg">—</div><div class="stat-lbl">Moy / longueur</div></div>
+        </div>
+        <div style="display:flex;gap:12px;margin-bottom:16px">
+          <div class="stat" style="flex:1;background:#111;border-radius:8px;padding:10px">
+            <div class="stat-val amber" id="s-best">—</div>
+            <div class="stat-lbl">🥇 Meilleure (L<span id="s-best-n">?</span>)</div>
+          </div>
+          <div class="stat" style="flex:1;background:#111;border-radius:8px;padding:10px">
+            <div class="stat-val red" id="s-worst">—</div>
+            <div class="stat-lbl">Moins bonne (L<span id="s-worst-n">?</span>)</div>
+          </div>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="lapChart"></canvas>
+        </div>
+      </div>
+      <button class="btn-share" onclick="shareSession()">
+        📤 Partager les résultats
+      </button>
+    </div>
+  </div>
+
+  <!-- ── Tab Historique ── -->
+  <div id="tab-history" style="display:none">
+    <div class="card">
+      <div class="card-title">
+        Sessions sauvegardées
+        <button class="btn-clear" onclick="clearHistory()">Effacer tout</button>
+      </div>
+      <div id="history-list"><div class="empty">Aucune session enregistrée.</div></div>
+    </div>
+  </div>
+
+<script>
+// ── Utilitaires ────────────────────────────────────────────────────────────
+
+function fmtMs(ms) {
+  if (!ms) return '—';
+  const h = Math.floor(ms / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  const s = Math.floor((ms % 60000) / 1000);
+  const t = Math.floor((ms % 1000) / 100);
+  if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}.${t}`;
+}
+
+function fmtSec(ms) {
+  return (ms / 1000).toFixed(1) + 's';
+}
+
+// ── Lecture paramètre URL ──────────────────────────────────────────────────
+
+function getUrlSession() {
+  const params = new URLSearchParams(window.location.search);
+  const s = params.get('s');
+  if (!s) return null;
+  try {
+    return JSON.parse(atob(s));
+  } catch(e) {
+    console.error('QR data invalid', e);
+    return null;
+  }
+}
+
+// ── Historique localStorage ────────────────────────────────────────────────
+
+function loadHistory() {
+  try { return JSON.parse(localStorage.getItem('pt_history') || '[]'); }
+  catch(e) { return []; }
+}
+
+function saveToHistory(session) {
+  const history = loadHistory();
+  // Éviter les doublons (même date + même pool + mêmes laps)
+  const key = session.d + session.p + session.n;
+  if (!history.find(h => h.d + h.p + h.n === key)) {
+    history.unshift(session);
+    if (history.length > 50) history.pop(); // garder max 50 sessions
+    localStorage.setItem('pt_history', JSON.stringify(history));
+  }
+}
+
+function clearHistory() {
+  if (confirm('Effacer tout l\'historique ?')) {
+    localStorage.removeItem('pt_history');
+    renderHistory();
+  }
+}
+
+// ── Affichage session ──────────────────────────────────────────────────────
+
+let chartInstance = null;
+
+function displaySession(s) {
+  document.getElementById('no-session').style.display = 'none';
+  document.getElementById('session-content').style.display = 'block';
+
+  const bestLap  = s.laps ? Math.min(...s.laps) : null;
+  const worstLap = s.laps ? Math.max(...s.laps) : null;
+  const bestIdx  = s.laps ? s.laps.indexOf(bestLap) + 1 : '?';
+  const worstIdx = s.laps ? s.laps.indexOf(worstLap) + 1 : '?';
+
+  document.getElementById('session-title').textContent =
+    `${s.d} — Bassin ${s.p}m`;
+  document.getElementById('s-total').textContent  = fmtMs(s.t);
+  document.getElementById('s-dist').textContent   = `${s.n * parseInt(s.p)}m`;
+  document.getElementById('s-laps').textContent   = s.n;
+  document.getElementById('s-avg').textContent    = fmtMs(s.avg);
+  document.getElementById('s-best').textContent   = fmtMs(bestLap);
+  document.getElementById('s-best-n').textContent = bestIdx;
+  document.getElementById('s-worst').textContent  = fmtMs(worstLap);
+  document.getElementById('s-worst-n').textContent = worstIdx;
+
+  // Graphique
+  if (s.laps && s.laps.length > 0) {
+    if (chartInstance) chartInstance.destroy();
+    const ctx = document.getElementById('lapChart').getContext('2d');
+    const avgMs = s.avg;
+    chartInstance = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: s.laps.map((_, i) => `L${i+1}`),
+        datasets: [{
+          label: 'Temps (s)',
+          data: s.laps.map(ms => (ms / 1000).toFixed(2)),
+          backgroundColor: s.laps.map(ms => {
+            if (ms === bestLap)  return '#ffb74d';
+            if (ms === worstLap) return '#ef5350';
+            return ms <= avgMs   ? '#4db6ac' : '#4fc3f7';
+          }),
+          borderRadius: 4,
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: ctx => fmtMs(s.laps[ctx.dataIndex]) + '  (' + fmtSec(s.laps[ctx.dataIndex]) + ')'
+            }
+          }
+        },
+        scales: {
+          x: { ticks: { color: '#757575', font: { size: 10 } }, grid: { color: '#222' } },
+          y: {
+            ticks: { color: '#757575', callback: v => v + 's' },
+            grid: { color: '#222' },
+            min: Math.max(0, Math.min(...s.laps) / 1000 - 3)
+          }
+        }
+      }
+    });
+  }
+}
+
+// ── Partage ────────────────────────────────────────────────────────────────
+
+function shareSession() {
+  const s = currentSession;
+  if (!s) return;
+  const bestLap  = s.laps ? Math.min(...s.laps) : null;
+  const bestIdx  = s.laps ? s.laps.indexOf(bestLap) + 1 : '?';
+  const text = [
+    `🏊 Séance du ${s.d}`,
+    `Bassin ${s.p}m | ${s.n} longueurs | ${s.n * parseInt(s.p)}m`,
+    `⏱ Total : ${fmtMs(s.t)}`,
+    `📊 Moy/long : ${fmtMs(s.avg)}`,
+    bestLap ? `🥇 Meilleure : ${fmtMs(bestLap)} (L${bestIdx})` : '',
+    `\nVia PiscineTimer 🏊‍♂️`
+  ].filter(Boolean).join('\n');
+
+  if (navigator.share) {
+    navigator.share({ title: '🏊 Résultats de nage', text });
+  } else {
+    navigator.clipboard?.writeText(text)
+      .then(() => alert('Résultats copiés !'))
+      .catch(() => alert(text));
+  }
+}
+
+// ── Historique ─────────────────────────────────────────────────────────────
+
+function renderHistory() {
+  const history = loadHistory();
+  const el = document.getElementById('history-list');
+  if (history.length === 0) {
+    el.innerHTML = '<div class="empty">Aucune session enregistrée.</div>';
+    return;
+  }
+  el.innerHTML = history.map((s, i) => `
+    <div class="history-item" onclick="selectHistory(${i})">
+      <div class="history-row">
+        <span class="history-main">${s.n * parseInt(s.p)}m — ${s.n} long.</span>
+        <span class="history-badge">${s.p}m</span>
+      </div>
+      <div class="history-row" style="margin-top:4px">
+        <span class="history-sub">${s.d}</span>
+        <span class="history-sub">⏱ ${fmtMs(s.t)} | moy ${fmtMs(s.avg)}</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+function selectHistory(idx) {
+  const history = loadHistory();
+  currentSession = history[idx];
+  displaySession(currentSession);
+  showTab('session');
+}
+
+// ── Onglets ────────────────────────────────────────────────────────────────
+
+function showTab(tab) {
+  document.getElementById('tab-session').style.display  = tab === 'session'  ? 'block' : 'none';
+  document.getElementById('tab-history').style.display  = tab === 'history'  ? 'block' : 'none';
+  document.querySelectorAll('.tab').forEach((el, i) => {
+    el.classList.toggle('active', (i === 0) === (tab === 'session'));
+  });
+  if (tab === 'history') renderHistory();
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────
+
+let currentSession = null;
+
+window.addEventListener('load', () => {
+  const urlSession = getUrlSession();
+  if (urlSession) {
+    currentSession = urlSession;
+    saveToHistory(urlSession);
+    displaySession(urlSession);
+    document.getElementById('subtitle').textContent =
+      `Séance du ${urlSession.d}`;
+  } else {
+    // Afficher la dernière session de l'historique si elle existe
+    const history = loadHistory();
+    if (history.length > 0) {
+      currentSession = history[0];
+      displaySession(currentSession);
+      document.getElementById('subtitle').textContent =
+        `Dernière séance — ${history[0].d}`;
+    } else {
+      document.getElementById('no-session').style.display = 'block';
+    }
+  }
+  renderHistory();
+});
+</script>
+</body>
+</html>
