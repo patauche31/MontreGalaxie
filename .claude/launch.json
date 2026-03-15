@@ -1,0 +1,35 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "build-debug",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "E:\\MontreGalaxie\\gradlew.bat", ":app:assembleDebug", "--stacktrace"],
+      "port": 5037
+    },
+    {
+      "name": "install-debug",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "E:\\MontreGalaxie\\gradlew.bat", ":app:installDebug"],
+      "port": 5037
+    },
+    {
+      "name": "adb-wifi-watch",
+      "runtimeExecutable": "adb",
+      "runtimeArgs": ["connect", "192.168.137.148:32873"],
+      "port": 32873
+    },
+    {
+      "name": "adb-devices",
+      "runtimeExecutable": "adb",
+      "runtimeArgs": ["devices", "-l"],
+      "port": 5037
+    },
+    {
+      "name": "dashboard-server",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8080", "--directory", "E:\\MontreGalaxie\\piscine-dashboard"],
+      "port": 8080
+    }
+  ]
+}
