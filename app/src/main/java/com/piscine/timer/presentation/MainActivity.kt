@@ -3,6 +3,7 @@ package com.piscine.timer.presentation
 import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.LaunchedEffect
@@ -93,6 +94,17 @@ class MainActivity : ComponentActivity() {
                 val currentSpm   by _currentSpm.asStateFlow().collectAsState()
 
                 var lastCustomMeters by remember { mutableStateOf(prefs.lastCustomMeters) }
+
+                // ── Écran toujours allumé pendant la nage ─────────────────────
+                LaunchedEffect(session.state) {
+                    when (session.state) {
+                        SessionState.RUNNING ->
+                            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        SessionState.IDLE, SessionState.FINISHED ->
+                            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        else -> { /* PAUSED : on garde l'écran allumé */ }
+                    }
+                }
 
                 // ── Cycle de vie LapDetector ──────────────────────────────────
                 LaunchedEffect(session.state, autoDetectOn) {
@@ -206,17 +218,23 @@ class MainActivity : ComponentActivity() {
                                                session.state == SessionState.RUNNING,
                             vibrationEnabled = vibrationOn,
                             currentSpm       = currentSpm,
+                            lapDetector      = lapDetector,
                             onLap            = { recordLapWithStrokes() },
                             onTogglePause    = { sessionManager.togglePause() },
                             onFinish         = {
-                                sessionManager.finish()
+                                // Capture AVANT finish() pour éviter toute race condition
                                 val snap    = sessionManager.session.value
                                 val elapsed = sessionManager.elapsedMs.value
+                                sessionManager.finish()
                                 lifecycleScope.launch(Dispatchers.IO) {
-                                    val savedId = sessionRepository.saveSession(snap, elapsed)
-                                    Log.d("Room", "Session sauvegardée — id=$savedId laps=${snap.lapCount}")
-                                    sessionRepository.getSessionById(savedId)?.let { entity ->
-                                        WearSyncManager.sendSession(applicationContext, entity)
+                                    if (snap.lapCount > 0) {
+                                        val savedId = sessionRepository.saveSession(snap, elapsed)
+                                        Log.d("Room", "Session sauvegardée — id=$savedId laps=${snap.lapCount}")
+                                        sessionRepository.getSessionById(savedId)?.let { entity ->
+                                            WearSyncManager.sendSession(applicationContext, entity)
+                                        }
+                                    } else {
+                                        Log.w("Room", "Session ignorée — 0 laps enregistrés")
                                     }
                                 }
                                 navController.navigate(Routes.SUMMARY)

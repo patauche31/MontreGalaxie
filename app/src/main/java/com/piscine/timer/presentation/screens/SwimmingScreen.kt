@@ -15,6 +15,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.wear.compose.material.*
+import com.piscine.timer.domain.LapDetector
 import com.piscine.timer.domain.model.LapData
 import com.piscine.timer.domain.model.LapData.Companion.formatTime
 import com.piscine.timer.domain.model.SessionState
@@ -34,9 +35,10 @@ fun SwimmingScreen(
     session          : SwimSession,
     elapsedMs        : Long,
     currentLapMs     : Long,
-    autoDetectActive : Boolean = false,
-    vibrationEnabled : Boolean = true,
-    currentSpm       : Float   = 0f,
+    autoDetectActive : Boolean      = false,
+    vibrationEnabled : Boolean      = true,
+    currentSpm       : Float        = 0f,
+    lapDetector      : LapDetector? = null,
     onLap            : () -> Unit,
     onTogglePause    : () -> Unit,
     onFinish         : () -> Unit
@@ -60,7 +62,7 @@ fun SwimmingScreen(
                     .fillMaxSize()
                     .padding(bottom = 52.dp)
                     .clickable(
-                        enabled           = !isPaused,
+                        enabled           = !isPaused && lapDetector?.isInLockout != true,
                         indication        = null,
                         interactionSource = remember { MutableInteractionSource() }
                     ) {

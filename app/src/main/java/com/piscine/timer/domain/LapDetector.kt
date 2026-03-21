@@ -5,6 +5,8 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.Handler
+import android.os.Looper
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.util.Log
@@ -12,24 +14,30 @@ import com.piscine.timer.domain.model.PoolLength
 import kotlin.math.sqrt
 
 /**
- * Détection automatique des virages — algorithme combiné accéléromètre + gyroscope.
+ * Détection automatique des virages — algorithme basé sur la COULÉE.
  *
- * Inspiré de l'approche Garmin/Huawei :
+ * Observation clé des données CSV réelles (Galaxy Watch 5 Pro, dos crawlé 25m) :
+ * ┌─────────────────────────────────────────────────────────────────────────┐
+ * │  Pendant la nage      : événements accéléromètre toutes les ~20ms       │
+ * │  Pendant la coulée    : GAP DE 8-10 SECONDES sans aucun événement       │
+ * │  → L'OS Wear OS coupe le capteur quand il détecte l'immobilité          │
+ * └─────────────────────────────────────────────────────────────────────────┘
  *
- * ┌──────────────────────────────────────────────────────────────────┐
- * │  SWIMMING  →  (acc faible 250ms)  →  WALL_CANDIDATE             │
- * │  WALL_CANDIDATE  →  (rotation ≥ 2.5 rad en 3s)  →  LAP ✅       │
- * │  WALL_CANDIDATE  →  (timeout 3s sans rotation)  →  SWIMMING     │
- * └──────────────────────────────────────────────────────────────────┘
+ * Pattern détecté au virage (extrait CSV) :
+ *   t=43147ms  acc=14.5 m/s²  ← push-off mur (pic énorme)
+ *   t=43550ms  acc=5.3        ← dernier event avant coulée
+ *   [ ---- GAP 10.7 secondes AUCUN EVENT ---- ]  ← COULÉE détectée ici
+ *   t=54259ms  acc=8.3        ← bras reprend, nage continue
  *
- * Pourquoi ça marche mieux :
- *   - La nage normale génère du mouvement continu → acc rarement < seuil
- *   - Au virage : bref moment quasi-statique (toucher le mur / retournement)
- *     PUIS rotation 180° → les deux signaux ensemble = virage certain
+ * Algorithme :
+ *   1. Chaque event accéléromètre → reschedule un Runnable à +COULE_SILENCE_MS
+ *   2. Si le Runnable se déclenche (= silence ≥ 2s) ET qu'un pic récent existait
+ *      → virage validé ✅
  *
- * @param context        Context Android
- * @param poolLength     Longueur du bassin → durée minimum entre deux laps
- * @param onLapDetected  Callback déclenché à chaque virage validé
+ * Avantages vs approche rotation :
+ *   ✓ Aucun gyroscope nécessaire (moins de batterie)
+ *   ✓ Robuste aux virages dos ouverts (pas de culbute)
+ *   ✓ Basé sur comportement OS réel mesuré
  */
 class LapDetector(
     context: Context,
@@ -38,88 +46,84 @@ class LapDetector(
     private val logger: SensorLogger? = null
 ) : SensorEventListener {
 
-    // ── Constantes de l'algorithme ─────────────────────────────────────────
-
     companion object {
         private const val TAG = "LapDetector"
 
-        // Accélération linéaire max pour "contact mur" (m/s²)
-        // À 0 = parfaitement immobile. En nage on dépasse souvent 2-3 m/s².
-        // ⬇ 1.5→1.2 : plus strict — élimine les pauses de nage normale (dos crawlé)
-        const val WALL_ACC_THRESHOLD   = 1.2f
+        /** Seuil push-off (m/s²). Push-off réel = 10-15. Nage normale = 5-9. */
+        const val PUSH_THRESHOLD     = 5.0f
 
-        // Durée de quasi-immobilité pour valider le contact mur (ms)
-        // ⬆ 250→500 : en recovery dos crawlé le bras est immobile ~200ms max → éliminé
-        const val WALL_DURATION_MS     = 500L
+        /** Durée de silence capteur pour déclarer une coulée (ms).
+         *  Données réelles : gaps de 1.5-5s après push-off. 1500ms = bon compromis. */
+        const val COULE_SILENCE_MS   = 1500L
 
-        // Fenêtre max après contact mur pour détecter la rotation (ms)
-        const val ROTATION_WINDOW_MS   = 4_000L
+        /** Le dernier pic doit être survenu ≤ X ms avant le début du silence. */
+        const val PUSH_BEFORE_GAP_MS = 3000L
 
-        // Rotation cumulée minimum pour confirmer le virage (~230°)
-        // ⬆ 2.5→4.0 : un vrai virage dos = retournement ~180° + push = ~4 rad cumulés
-        const val MIN_ROTATION_RAD     = 4.0f
-
-        // Vitesse angulaire minimale pour accumuler (filtre bruit) (rad/s)
-        const val MIN_ANG_VEL          = 0.8f
-
-        // Durée maximale du contact mur (si > → nageur arrêté, pas virage)
-        const val MAX_WALL_DURATION_MS = 4_000L
+        /** Après une détection auto, bloquer les taps manuels pendant X ms (anti double-compte) */
+        const val POST_DETECT_LOCKOUT_MS = 4000L
     }
 
-    // ── État interne ───────────────────────────────────────────────────────
-
-    private enum class State { SWIMMING, WALL_CANDIDATE }
-
-    private var state = State.SWIMMING
-    private var isActive = false
-
-    private var wallStartMs        = 0L   // début de la phase quasi-statique
-    private var wallConfirmedMs    = 0L   // fin de la phase quasi-statique (wall validé)
-    private var accumulatedRotation = 0f  // rotation cumulée depuis wallConfirmedMs
-    private var lastDetectionMs    = 0L   // timestamp du dernier virage validé
-    private var lastGyroNanos      = 0L   // pour calcul Δt gyroscope
-
-    // Durée minimum entre deux laps selon la longueur du bassin
+    // ── Durée minimum entre deux laps ────────────────────────────────────────
     private val minLapMs: Long = when (poolLength) {
-        PoolLength.POOL_25   -> 40_000L   // 40s min — nageur loisir ~40-70s/25m (⬆ 30→40)
-        PoolLength.POOL_50   -> 70_000L   // 70s min — nageur loisir ~70-120s/50m (⬆ 60→70)
-        PoolLength.POOL_CUSTOM -> 25_000L // 25s min pour bassin personnalisé
+        PoolLength.POOL_25     -> 15_000L  // 15s min (données réelles : ~18s pour 25m rapide)
+        PoolLength.POOL_50     -> 35_000L  // 35s min (nageur loisir rapide)
+        PoolLength.POOL_CUSTOM -> 12_000L
     }
 
-    // ── Capteurs ──────────────────────────────────────────────────────────
+    // ── État interne ─────────────────────────────────────────────────────────
+    private var isActive        = false
+    private var lastEventMs     = 0L   // timestamp du dernier événement capteur
+    private var lastPeakMs      = 0L   // timestamp du dernier pic > PUSH_THRESHOLD
+    private var lastDetectionMs = 0L   // timestamp du dernier virage validé
 
+    /** True pendant POST_DETECT_LOCKOUT_MS après une détection auto — bloque les taps manuels */
+    val isInLockout: Boolean
+        get() = System.currentTimeMillis() - lastDetectionMs < POST_DETECT_LOCKOUT_MS
+
+    // ── Handler – détecte le silence capteur (coulée) ────────────────────────
+    private val handler = Handler(Looper.getMainLooper())
+    private val couleeRunnable = Runnable {
+        val nowMs           = System.currentTimeMillis()
+        val silenceDuration = nowMs - lastEventMs
+        val peakBeforeGap   = lastEventMs - lastPeakMs   // temps entre dernier pic et début silence
+
+        Log.d(TAG, "🕵️ Coulée check: silence=${silenceDuration}ms, picAvantGap=${peakBeforeGap}ms")
+        logger?.event("COULE_CHECK silence=${silenceDuration}ms peakAge=${peakBeforeGap}ms")
+
+        if (silenceDuration >= COULE_SILENCE_MS &&
+            lastPeakMs > 0 &&
+            peakBeforeGap <= PUSH_BEFORE_GAP_MS &&
+            nowMs - lastDetectionMs >= minLapMs
+        ) {
+            logger?.event("LAP_AUTO coulée=${silenceDuration}ms")
+            Log.d(TAG, "🏊 VIRAGE COULÉE validé! silence=${silenceDuration}ms après pic +${peakBeforeGap}ms")
+            triggerLap(nowMs)
+        }
+    }
+
+    // ── Capteurs ─────────────────────────────────────────────────────────────
     private val sensorManager: SensorManager =
         context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
 
-    // TYPE_LINEAR_ACCELERATION = accéléromètre sans gravité → 0 quand immobile
+    // TYPE_LINEAR_ACCELERATION = accélération sans gravité → ~0 quand vraiment immobile
     private val linearAccSensor: Sensor? =
         sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
-
-    private val gyroSensor: Sensor? =
-        sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
 
     @Suppress("DEPRECATION")
     private val vibrator: Vibrator =
         context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
 
-    val isAvailable: Boolean get() = linearAccSensor != null && gyroSensor != null
+    val isAvailable: Boolean get() = linearAccSensor != null
 
-    // ── SensorEventListener ───────────────────────────────────────────────
-
+    // ── SensorEventListener ──────────────────────────────────────────────────
     override fun onSensorChanged(event: SensorEvent) {
-        if (!isActive) return
-        val nowMs = System.currentTimeMillis()
-
-        when (event.sensor.type) {
-            Sensor.TYPE_LINEAR_ACCELERATION -> handleAccelerometer(event, nowMs)
-            Sensor.TYPE_GYROSCOPE           -> handleGyroscope(event, nowMs)
-        }
+        if (!isActive || event.sensor.type != Sensor.TYPE_LINEAR_ACCELERATION) return
+        handleAccelerometer(event, System.currentTimeMillis())
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
 
-    // ── Traitement accéléromètre ──────────────────────────────────────────
-
+    // ── Traitement accéléromètre ──────────────────────────────────────────────
     private fun handleAccelerometer(event: SensorEvent, nowMs: Long) {
         val acc = sqrt(
             event.values[0] * event.values[0] +
@@ -134,113 +138,32 @@ class LapDetector(
             az        = event.values[2],
             magnitude = acc,
             smoothed  = acc,
-            event     = if (state == State.WALL_CANDIDATE) "WALL_CAND" else ""
+            event     = ""
         )
 
-        // Cooldown global : ignorer pendant minLapMs après un lap
-        if (nowMs - lastDetectionMs < minLapMs) return
+        // Mise à jour timestamp dernier événement
+        lastEventMs = nowMs
 
-        when (state) {
+        // Détection pic push-off / mouvement vigoureux
+        if (acc > PUSH_THRESHOLD) {
+            lastPeakMs = nowMs
+            Log.v(TAG, "💪 Pic acc=${"%.1f".format(acc)} m/s²")
+        }
 
-            State.SWIMMING -> {
-                if (acc < WALL_ACC_THRESHOLD) {
-                    // Début possible du contact mur
-                    wallStartMs = nowMs
-                    state = State.WALL_CANDIDATE
-                    wallConfirmedMs = 0L
-                    accumulatedRotation = 0f
-                    lastGyroNanos = 0L
-                    logger?.event("WALL_START acc=${"%.2f".format(acc)}")
-                    Log.v(TAG, "⬜ Wall candidate — acc=${"%.2f".format(acc)} m/s²")
-                }
-            }
-
-            State.WALL_CANDIDATE -> {
-                val wallDuration = nowMs - wallStartMs
-
-                if (wallDuration > MAX_WALL_DURATION_MS) {
-                    // Trop long immobile → nageur arrêté, pas un virage
-                    resetToSwimming("Timeout immobilité ${wallDuration}ms")
-                    return
-                }
-
-                if (acc >= WALL_ACC_THRESHOLD) {
-                    // Mouvement repris
-                    if (wallDuration < WALL_DURATION_MS) {
-                        // Quasi-immobilité trop courte → faux positif
-                        resetToSwimming("Faux contact trop court ${wallDuration}ms")
-                    } else if (wallConfirmedMs == 0L) {
-                        // ✅ Contact mur validé ! On commence à accumuler la rotation
-                        wallConfirmedMs = nowMs
-                        logger?.event("WALL_CONFIRMED dur=${wallDuration}ms")
-                        Log.d(TAG, "✅ Contact mur validé (${wallDuration}ms) — attente rotation…")
-                    } else {
-                        // On est en phase rotation, vérifie le timeout
-                        if (nowMs - wallConfirmedMs > ROTATION_WINDOW_MS) {
-                            resetToSwimming("Fenêtre rotation expirée")
-                        }
-                    }
-                }
-            }
+        // Reschedule détection coulée : si aucun event d'ici COULE_SILENCE_MS → virage
+        handler.removeCallbacks(couleeRunnable)
+        val cooldownOk = nowMs - lastDetectionMs >= minLapMs
+        if (lastPeakMs > 0 && cooldownOk) {
+            handler.postDelayed(couleeRunnable, COULE_SILENCE_MS)
         }
     }
 
-    // ── Traitement gyroscope ──────────────────────────────────────────────
-
-    private fun handleGyroscope(event: SensorEvent, nowMs: Long) {
-        val dt = if (lastGyroNanos == 0L) 0f
-                 else (event.timestamp - lastGyroNanos) / 1_000_000_000f
-        lastGyroNanos = event.timestamp
-
-        if (dt <= 0f || dt > 0.5f) return
-
-        val magnitude = sqrt(
-            event.values[0] * event.values[0] +
-            event.values[1] * event.values[1] +
-            event.values[2] * event.values[2]
-        )
-
-        if (magnitude < MIN_ANG_VEL) return
-        if (state != State.WALL_CANDIDATE || wallConfirmedMs == 0L) return
-        if (nowMs - lastDetectionMs < minLapMs) return
-
-        // Fenêtre rotation expirée ?
-        if (nowMs - wallConfirmedMs > ROTATION_WINDOW_MS) {
-            resetToSwimming("Fenêtre rotation expirée (gyro)")
-            return
-        }
-
-        // Accumulation rotation
-        accumulatedRotation += magnitude * dt
-        Log.v(TAG, "↻ rotation=${" %.2f".format(accumulatedRotation)} rad (target=$MIN_ROTATION_RAD)")
-
-        if (accumulatedRotation >= MIN_ROTATION_RAD) {
-            logger?.event("LAP_AUTO rot=${"%.2f".format(accumulatedRotation)}rad")
-            Log.d(TAG, "🏊 VIRAGE! contact+rotation=${"%.2f".format(accumulatedRotation)} rad")
-            triggerLap(nowMs)
-        }
-    }
-
-    // ── Helpers ───────────────────────────────────────────────────────────
-
+    // ── Déclenchement virage ──────────────────────────────────────────────────
     private fun triggerLap(nowMs: Long) {
         lastDetectionMs = nowMs
-        state = State.SWIMMING
-        wallStartMs = 0L
-        wallConfirmedMs = 0L
-        accumulatedRotation = 0f
-        lastGyroNanos = 0L
+        lastPeakMs      = 0L
         vibrate()
         onLapDetected()
-    }
-
-    private fun resetToSwimming(reason: String) {
-        Log.v(TAG, "↩ SWIMMING — $reason")
-        state = State.SWIMMING
-        wallStartMs = 0L
-        wallConfirmedMs = 0L
-        accumulatedRotation = 0f
-        lastGyroNanos = 0L
     }
 
     /** Vibration 2 impulsions courtes — confirmation virage */
@@ -254,38 +177,39 @@ class LapDetector(
         )
     }
 
-    // ── Cycle de vie ──────────────────────────────────────────────────────
-
+    // ── Cycle de vie ──────────────────────────────────────────────────────────
     fun start() {
         if (!isAvailable) {
-            Log.w(TAG, "Capteurs non disponibles")
+            Log.w(TAG, "Capteur linéaire non disponible")
             return
         }
-        isActive = true
-        resetToSwimming("start()")
+        isActive        = true
+        lastEventMs     = System.currentTimeMillis()
+        lastPeakMs      = 0L
         lastDetectionMs = System.currentTimeMillis()
         sensorManager.registerListener(this, linearAccSensor, SensorManager.SENSOR_DELAY_GAME)
-        sensorManager.registerListener(this, gyroSensor,       SensorManager.SENSOR_DELAY_GAME)
-        Log.d(TAG, "Démarré — minLap=${minLapMs/1000}s | acc<${WALL_ACC_THRESHOLD} → rot≥${MIN_ROTATION_RAD}rad")
+        Log.d(TAG, "Démarré — minLap=${minLapMs/1000}s | push>${PUSH_THRESHOLD} | silence>${COULE_SILENCE_MS}ms")
     }
 
     fun pause() {
         isActive = false
-        resetToSwimming("pause()")
+        handler.removeCallbacks(couleeRunnable)
+        Log.d(TAG, "Pause")
     }
 
     fun resume() {
         if (!isAvailable) return
-        isActive = true
-        resetToSwimming("resume()")
+        isActive        = true
+        lastEventMs     = System.currentTimeMillis()
+        lastPeakMs      = 0L
         lastDetectionMs = System.currentTimeMillis()
         Log.d(TAG, "Reprise")
     }
 
     fun stop() {
         isActive = false
+        handler.removeCallbacks(couleeRunnable)
         sensorManager.unregisterListener(this)
-        resetToSwimming("stop()")
         Log.d(TAG, "Arrêté")
     }
 }
