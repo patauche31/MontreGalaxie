@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Politique de confidentialité — PiscineTimer</title>
+<style>
+  body { font-family: Arial, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; color: #333; line-height: 1.7; }
+  h1 { color: #0D47A1; border-bottom: 3px solid #0D47A1; padding-bottom: 10px; }
+  h2 { color: #1565C0; margin-top: 30px; }
+  .date { color: #888; font-size: 0.9em; }
+  .highlight { background: #E3F2FD; border-left: 4px solid #0D47A1; padding: 12px 16px; margin: 20px 0; border-radius: 4px; }
+  footer { margin-top: 50px; padding-top: 20px; border-top: 1px solid #ddd; color: #888; font-size: 0.85em; }
+</style>
+</head>
+<body>
+
+<h1>Politique de confidentialité</h1>
+<p class="date">Dernière mise à jour : mars 2026</p>
+
+<div class="highlight">
+  <strong>En résumé :</strong> PiscineTimer ne collecte, ne stocke et ne transmet aucune donnée personnelle à des serveurs externes. Toutes vos données restent sur votre appareil.
+</div>
+
+<h2>1. Présentation</h2>
+<p>PiscineTimer est une application de chronométrage de natation composée de deux parties :</p>
+<ul>
+  <li>Une application <strong>Galaxy Watch</strong> (Wear OS) qui enregistre vos séances de nage</li>
+  <li>Une application <strong>téléphone Android</strong> compagnon qui affiche les statistiques</li>
+</ul>
+
+<h2>2. Données collectées</h2>
+<p>PiscineTimer collecte uniquement les données nécessaires à son fonctionnement :</p>
+<ul>
+  <li><strong>Données de séances</strong> : durée, nombre de longueurs, temps par longueur, fréquence de nage (cadence)</li>
+  <li><strong>Données de capteurs</strong> (optionnel, mode debug) : données brutes de l'accéléromètre et du gyroscope pour améliorer la détection automatique des virages</li>
+</ul>
+
+<h2>3. Stockage des données</h2>
+<p>Toutes les données sont stockées <strong>localement sur vos appareils</strong> :</p>
+<ul>
+  <li>Sur la montre : base de données Room (stockage interne de l'app)</li>
+  <li>Sur le téléphone : base de données Room (stockage interne de l'app)</li>
+  <li>La synchronisation entre montre et téléphone s'effectue via <strong>Bluetooth</strong>, sans passer par Internet</li>
+</ul>
+
+<h2>4. Données non collectées</h2>
+<p>PiscineTimer <strong>ne collecte pas</strong> :</p>
+<ul>
+  <li>Votre nom, email ou toute identité personnelle</li>
+  <li>Votre localisation GPS</li>
+  <li>Vos contacts, photos ou fichiers</li>
+  <li>Données de santé transmises à des tiers</li>
+  <li>Données publicitaires ou de tracking</li>
+</ul>
+
+<h2>5. Partage des données</h2>
+<p>Aucune donnée n'est partagée avec des tiers. PiscineTimer ne contient aucun SDK publicitaire, analytique ou de tracking.</p>
+
+<h2>6. Autorisations requises</h2>
+<ul>
+  <li><strong>BODY_SENSORS</strong> : accès à l'accéléromètre et au gyroscope de la montre pour la détection des virages</li>
+  <li><strong>VIBRATE</strong> : retour haptique lors des passages</li>
+  <li><strong>WAKE_LOCK</strong> : maintien de l'écran allumé pendant la nage</li>
+</ul>
+<p>Ces autorisations sont utilisées uniquement en local, sur l'appareil.</p>
+
+<h2>7. Suppression des données</h2>
+<p>Pour supprimer toutes vos données, désinstallez l'application. Toutes les données locales seront effacées automatiquement.</p>
+
+<h2>8. Contact</h2>
+<p>Pour toute question concernant cette politique de confidentialité :</p>
+<p><strong>Patrick Carrere</strong><br>
+GitHub : <a href="https://github.com/patauche31">github.com/patauche31</a></p>
+
+<footer>
+  &copy; 2026 Patrick Carrere — PiscineTimer. Tous droits réservés.
+</footer>
+
+</body>
+</html>
