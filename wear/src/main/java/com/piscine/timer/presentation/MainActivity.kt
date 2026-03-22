@@ -170,7 +170,9 @@ class MainActivity : ComponentActivity() {
 
                 SwipeDismissableNavHost(
                     navController    = navController,
-                    startDestination = Routes.READY
+                    startDestination = Routes.READY,
+                    userSwipeEnabled = session.state != SessionState.RUNNING &&
+                                       session.state != SessionState.PAUSED
                 ) {
 
                     // ── Accueil ───────────────────────────────────────────────

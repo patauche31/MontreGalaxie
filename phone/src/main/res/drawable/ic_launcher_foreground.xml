@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Icône nageur stylisé (onde + bonhomme) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,30 m-8,0 a8,8 0 1,0 16,0 a8,8 0 1,0 -16,0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M38,55 Q46,48 54,55 Q62,62 70,55 L72,60 Q64,67 54,62 Q44,57 36,62 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M46,45 L54,38 L62,42 L70,50 L64,54 L58,46 L54,50 L48,52 Z" />
+    <path
+        android:fillColor="#4FC3F7"
+        android:pathData="M30,68 Q38,61 46,68 Q54,75 62,68 Q70,61 78,68 L78,76 Q70,69 62,76 Q54,83 46,76 Q38,69 30,76 Z" />
+</vector>

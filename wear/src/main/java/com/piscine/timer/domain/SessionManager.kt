@@ -24,6 +24,7 @@ class SessionManager(private val sensorLogger: SensorLogger? = null) {
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private var timerJob: Job? = null
+    private var lastPauseToggleMs = 0L
 
     // ── État observable ──────────────────────────────────────────────────────
     private val _session = MutableStateFlow(SwimSession())
@@ -75,8 +76,8 @@ class SessionManager(private val sensorLogger: SensorLogger? = null) {
         // maxOf(0) : protection absolue contre les valeurs négatives (race condition)
         val lapTimeMs = maxOf(0L, currentElapsed - lapStartElapsed)
 
-        // Garde : ignorer les laps impossibles (< 5 secondes)
-        if (lapTimeMs < 5_000L) return
+        // Garde : ignorer les laps impossibles (< 15 secondes pour 25m minimum)
+        if (lapTimeMs < 15_000L) return
 
         val lapNumber = (_session.value.lapCount + 1)
 
@@ -93,8 +94,11 @@ class SessionManager(private val sensorLogger: SensorLogger? = null) {
         _session.update { it.copy(laps = it.laps + newLap) }
     }
 
-    /** Pause / Reprise (appui long bouton haut) */
+    /** Pause / Reprise — debounce 2s pour éviter les faux appuis (eau sur écran) */
     fun togglePause() {
+        val now = System.currentTimeMillis()
+        if (now - lastPauseToggleMs < 2_000L) return
+        lastPauseToggleMs = now
         val current = _session.value
         when (current.state) {
             SessionState.RUNNING -> {
