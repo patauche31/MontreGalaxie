@@ -20,6 +20,7 @@ import com.piscine.timer.domain.model.LapData
 import com.piscine.timer.domain.model.LapData.Companion.formatTime
 import com.piscine.timer.domain.model.SessionState
 import com.piscine.timer.domain.model.SwimSession
+import com.piscine.timer.domain.model.SwimStyle
 import com.piscine.timer.presentation.theme.*
 
 /**
@@ -38,6 +39,7 @@ fun SwimmingScreen(
     autoDetectActive : Boolean      = false,
     vibrationEnabled : Boolean      = true,
     currentSpm       : Float        = 0f,
+    swimStyle        : SwimStyle    = SwimStyle.INCONNU,
     lapDetector      : LapDetector? = null,
     onLap            : () -> Unit,
     onTogglePause    : () -> Unit,
@@ -60,7 +62,7 @@ fun SwimmingScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(bottom = 52.dp)
+                    .padding(bottom = 80.dp)
                     .clickable(
                         enabled           = !isPaused && lapDetector?.isInLockout != true,
                         indication        = null,
@@ -82,7 +84,7 @@ fun SwimmingScreen(
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
 
-                    // ── Ligne 1 : numéro longueur + distance + AUTO ──────────
+                    // ── Ligne 1 : numéro longueur + distance ─────────────────
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalAlignment     = Alignment.CenterVertically
@@ -105,6 +107,26 @@ fun SwimmingScreen(
                                 text  = "${session.totalDistanceMeters}m",
                                 fontSize = 13.sp,
                                 color = MaterialTheme.colors.onBackground.copy(alpha = 0.6f)
+                            )
+                        }
+                    }
+
+                    // ── Ligne 1b : style détecté + AUTO ──────────────────────
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment     = Alignment.CenterVertically
+                    ) {
+                        if (swimStyle != SwimStyle.INCONNU) {
+                            Text(
+                                text       = swimStyle.label,
+                                fontSize   = 12.sp,
+                                color      = when (swimStyle) {
+                                    SwimStyle.CRAWL    -> Blue400
+                                    SwimStyle.BRASSE   -> Teal200
+                                    SwimStyle.PAPILLON -> Amber400
+                                    else               -> MaterialTheme.colors.onBackground
+                                },
+                                fontWeight = FontWeight.Bold
                             )
                         }
                         if (autoDetectActive) {
@@ -169,13 +191,12 @@ fun SwimmingScreen(
                 }
             }
 
-            // ── Boutons bas : Pause | Stop ───────────────────────────────────
+            // ── Boutons bas : Pause | Stop (centrés, loin des bords courbes) ──
             Row(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .padding(horizontal = 24.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                    .padding(bottom = 18.dp),
+                horizontalArrangement = Arrangement.spacedBy(48.dp),
                 verticalAlignment     = Alignment.CenterVertically
             ) {
                 CompactButton(
@@ -183,17 +204,17 @@ fun SwimmingScreen(
                     colors  = ButtonDefaults.buttonColors(
                         backgroundColor = if (isPaused) Teal200 else Amber400
                     ),
-                    modifier = Modifier.size(44.dp)
+                    modifier = Modifier.size(52.dp)
                 ) {
-                    Text(text = if (isPaused) "▶" else "⏸", fontSize = 16.sp)
+                    Text(text = if (isPaused) "▶" else "⏸", fontSize = 18.sp)
                 }
 
                 CompactButton(
                     onClick  = onFinish,
                     colors   = ButtonDefaults.buttonColors(backgroundColor = Red400),
-                    modifier = Modifier.size(44.dp)
+                    modifier = Modifier.size(52.dp)
                 ) {
-                    Text(text = "■", fontSize = 16.sp)
+                    Text(text = "■", fontSize = 18.sp)
                 }
             }
         }

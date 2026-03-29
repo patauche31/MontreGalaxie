@@ -1,11 +1,14 @@
 package com.piscine.timer.presentation
 
+import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
+import com.piscine.timer.service.SwimTimerService
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -62,7 +65,9 @@ class MainActivity : ComponentActivity() {
     private var spmCollectJob : Job?           = null
 
     /** SPM courant partagé vers Compose */
-    private val _currentSpm = MutableStateFlow(0f)
+    private val _currentSpm   = MutableStateFlow(0f)
+    /** Style de nage détecté */
+    private val _swimStyle    = MutableStateFlow(com.piscine.timer.domain.model.SwimStyle.INCONNU)
 
     /** Enregistre un lap en incluant le nombre de coups depuis le dernier lap */
     private fun recordLapWithStrokes() {
@@ -73,6 +78,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
+        // Écran toujours allumé tant que l'app est au premier plan
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         val db = SwimDatabase.getInstance(applicationContext)
         sessionRepository = SessionRepository(db.sessionDao())
@@ -81,6 +88,21 @@ class MainActivity : ComponentActivity() {
         sessionManager = SessionManager(
             sensorLogger = if (prefs.debugLogging.value) sensorLogger else null
         )
+
+        // ── Bloquer le bouton Back pendant la nage ─────────────────────────────
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                val state = sessionManager.session.value.state
+                if (state == SessionState.RUNNING || state == SessionState.PAUSED) {
+                    // Ignorer le Back pendant la nage — ne rien faire
+                    Log.d("MainActivity", "Back ignoré pendant la nage")
+                } else {
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                    isEnabled = true
+                }
+            }
+        })
 
         setContent {
             PiscineTimerTheme {
@@ -92,17 +114,35 @@ class MainActivity : ComponentActivity() {
                 val autoDetectOn by prefs.autoDetectEnabled.collectAsState()
                 val vibrationOn  by prefs.vibrationEnabled.collectAsState()
                 val currentSpm   by _currentSpm.asStateFlow().collectAsState()
+                val swimStyle    by _swimStyle.asStateFlow().collectAsState()
 
                 var lastCustomMeters by remember { mutableStateOf(prefs.lastCustomMeters) }
 
-                // ── Écran toujours allumé pendant la nage ─────────────────────
+                // ── Service Ongoing Activity (indicateur sur cadran) ──────────
                 LaunchedEffect(session.state) {
                     when (session.state) {
                         SessionState.RUNNING ->
-                            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                            startService(Intent(this@MainActivity, SwimTimerService::class.java).apply {
+                                action = SwimTimerService.ACTION_START
+                                putExtra(SwimTimerService.EXTRA_ELAPSED, elapsedMs)
+                                putExtra(SwimTimerService.EXTRA_LAPS, session.lapCount)
+                            })
                         SessionState.IDLE, SessionState.FINISHED ->
-                            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                        else -> { /* PAUSED : on garde l'écran allumé */ }
+                            startService(Intent(this@MainActivity, SwimTimerService::class.java).apply {
+                                action = SwimTimerService.ACTION_STOP
+                            })
+                        else -> { }
+                    }
+                }
+
+                // ── Mise à jour du service toutes les secondes ────────────────
+                LaunchedEffect(elapsedMs) {
+                    if (session.state == SessionState.RUNNING && elapsedMs % 1000L < 100L) {
+                        startService(Intent(this@MainActivity, SwimTimerService::class.java).apply {
+                            action = SwimTimerService.ACTION_UPDATE
+                            putExtra(SwimTimerService.EXTRA_ELAPSED, elapsedMs)
+                            putExtra(SwimTimerService.EXTRA_LAPS, session.lapCount)
+                        })
                     }
                 }
 
@@ -146,8 +186,15 @@ class MainActivity : ComponentActivity() {
                                 strokeCounter = StrokeCounter(this@MainActivity)
                                 spmCollectJob?.cancel()
                                 spmCollectJob = lifecycleScope.launch {
-                                    strokeCounter!!.currentSpm.collect { spm ->
-                                        _currentSpm.value = spm
+                                    launch {
+                                        strokeCounter!!.currentSpm.collect { spm ->
+                                            _currentSpm.value = spm
+                                        }
+                                    }
+                                    launch {
+                                        strokeCounter!!.swimStyle.collect { style ->
+                                            _swimStyle.value = style
+                                        }
                                     }
                                 }
                                 strokeCounter?.start()
@@ -221,6 +268,7 @@ class MainActivity : ComponentActivity() {
                             vibrationEnabled = vibrationOn,
                             currentSpm       = currentSpm,
                             lapDetector      = lapDetector,
+                            swimStyle        = swimStyle,
                             onLap            = { recordLapWithStrokes() },
                             onTogglePause    = { sessionManager.togglePause() },
                             onFinish         = {
@@ -266,6 +314,18 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 }
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val state = sessionManager.session.value.state
+        if ((state == SessionState.RUNNING || state == SessionState.PAUSED) &&
+            ::navController.isInitialized &&
+            navController.currentDestination?.route != Routes.SWIMMING) {
+            navController.navigate(Routes.SWIMMING) {
+                popUpTo(Routes.READY) { inclusive = false }
             }
         }
     }

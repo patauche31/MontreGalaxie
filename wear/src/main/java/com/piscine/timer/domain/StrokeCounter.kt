@@ -6,6 +6,7 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.util.Log
+import com.piscine.timer.domain.model.SwimStyle
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -47,6 +48,18 @@ class StrokeCounter(context: Context) : SensorEventListener {
 
         /** Nombre de coups conservés pour le calcul SPM glissant */
         private const val SPM_WINDOW = 4
+
+        /** Nombre de coups minimum avant de classifier le style */
+        private const val STYLE_MIN_STROKES = 4
+
+        /** CoV (écart-type / moyenne) des intervalles au-dessus duquel = Brasse */
+        private const val BRASSE_COV_THRESHOLD = 0.28f
+
+        /** Amplitude EMA moyenne au-dessus de laquelle = Papillon (coups puissants) */
+        private const val PAPILLON_MAGNITUDE_THRESHOLD = 7.5f
+
+        /** Intervalle moyen au-dessus duquel (ms) = nage lente → Brasse ou Papillon */
+        private const val SLOW_STROKE_MS = 1800.0
     }
 
     // ── Capteur ───────────────────────────────────────────────────────────────
@@ -69,10 +82,22 @@ class StrokeCounter(context: Context) : SensorEventListener {
     /** Timestamps des derniers SPM_WINDOW coups (pour calcul glissant) */
     private val strokeTimestamps = ArrayDeque<Long>(SPM_WINDOW + 1)
 
+    /** Intervalles entre les derniers coups (ms) — pour classifier le style */
+    private val strokeIntervals  = ArrayDeque<Long>(STYLE_MIN_STROKES + 2)
+
+    /** Amplitude EMA au moment de chaque pic — pour distinguer Papillon */
+    private val strokeMagnitudes = ArrayDeque<Float>(STYLE_MIN_STROKES + 2)
+
+    /** Amplitude EMA max depuis le dernier coup (pour capturer le pic) */
+    private var peakSmoothed = 0f
+
     // ── StateFlow public ──────────────────────────────────────────────────────
 
-    private val _currentSpm = MutableStateFlow(0f)
+    private val _currentSpm   = MutableStateFlow(0f)
     val currentSpm: StateFlow<Float> = _currentSpm.asStateFlow()
+
+    private val _swimStyle = MutableStateFlow(SwimStyle.INCONNU)
+    val swimStyle: StateFlow<SwimStyle> = _swimStyle.asStateFlow()
 
     // ── SensorEventListener ───────────────────────────────────────────────────
 
@@ -87,6 +112,7 @@ class StrokeCounter(context: Context) : SensorEventListener {
 
         // Lissage exponentiel
         smoothed = EMA_ALPHA * magnitude + (1f - EMA_ALPHA) * smoothed
+        if (smoothed > peakSmoothed) peakSmoothed = smoothed
 
         val nowMs = System.currentTimeMillis()
 
@@ -98,6 +124,17 @@ class StrokeCounter(context: Context) : SensorEventListener {
 
                 isAboveThreshold = true
                 strokeCount++
+
+                // Intervalles pour classification style
+                if (lastStrokeMs > 0L) {
+                    val interval = nowMs - lastStrokeMs
+                    strokeIntervals.addLast(interval)
+                    if (strokeIntervals.size > STYLE_MIN_STROKES + 2) strokeIntervals.removeFirst()
+                }
+                strokeMagnitudes.addLast(peakSmoothed)
+                if (strokeMagnitudes.size > STYLE_MIN_STROKES + 2) strokeMagnitudes.removeFirst()
+                peakSmoothed = 0f
+
                 lastStrokeMs = nowMs
 
                 // Mise à jour SPM glissant
@@ -109,7 +146,13 @@ class StrokeCounter(context: Context) : SensorEventListener {
                         .average()
                     _currentSpm.value = (60_000.0 / avgIntervalMs).toFloat()
                 }
-                Log.v(TAG, "💪 Coup #$strokeCount — ${_currentSpm.value.toInt()} c/min")
+
+                // Classification style
+                if (strokeIntervals.size >= STYLE_MIN_STROKES) {
+                    _swimStyle.value = classifyStyle()
+                }
+
+                Log.v(TAG, "💪 Coup #$strokeCount — ${_currentSpm.value.toInt()} c/min — ${_swimStyle.value.label}")
             }
 
             // Front descendant : prêt pour le prochain coup
@@ -121,6 +164,32 @@ class StrokeCounter(context: Context) : SensorEventListener {
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
 
+    // ── Classification style ──────────────────────────────────────────────────
+
+    private fun classifyStyle(): SwimStyle {
+        val intervals  = strokeIntervals.map { it.toDouble() }
+        val magnitudes = strokeMagnitudes.map { it.toDouble() }
+
+        val mean = intervals.average()
+        val std  = sqrt(intervals.map { (it - mean) * (it - mean) }.average())
+        val cov  = (std / mean).toFloat()
+        val avgMag = magnitudes.average().toFloat()
+
+        return when {
+            // Brasse : intervalles irréguliers (phase de glisse = pic de CoV)
+            cov >= BRASSE_COV_THRESHOLD -> SwimStyle.BRASSE
+
+            // Papillon : lent + amplitude forte (ondulation du corps)
+            mean >= SLOW_STROKE_MS && avgMag >= PAPILLON_MAGNITUDE_THRESHOLD -> SwimStyle.PAPILLON
+
+            // Brasse régulière lente (sans glisse prononcée)
+            mean >= SLOW_STROKE_MS -> SwimStyle.BRASSE
+
+            // Défaut : crawl (rapide et régulier)
+            else -> SwimStyle.CRAWL
+        }
+    }
+
     // ── API publique ──────────────────────────────────────────────────────────
 
     /**
@@ -131,7 +200,11 @@ class StrokeCounter(context: Context) : SensorEventListener {
         val count = strokeCount
         strokeCount = 0
         strokeTimestamps.clear()
+        strokeIntervals.clear()
+        strokeMagnitudes.clear()
+        peakSmoothed = 0f
         _currentSpm.value = 0f
+        // On conserve le style détecté entre les longueurs
         return count
     }
 
@@ -140,9 +213,13 @@ class StrokeCounter(context: Context) : SensorEventListener {
         strokeCount      = 0
         lastStrokeMs     = System.currentTimeMillis()
         smoothed         = 0f
+        peakSmoothed     = 0f
         isAboveThreshold = false
         strokeTimestamps.clear()
-        _currentSpm.value = 0f
+        strokeIntervals.clear()
+        strokeMagnitudes.clear()
+        _currentSpm.value  = 0f
+        _swimStyle.value   = SwimStyle.INCONNU
         accSensor?.let {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
         }
@@ -153,6 +230,7 @@ class StrokeCounter(context: Context) : SensorEventListener {
         isActive = false
         sensorManager.unregisterListener(this)
         _currentSpm.value = 0f
+        _swimStyle.value  = SwimStyle.INCONNU
         Log.d(TAG, "Arrêté — coups enregistrés=$strokeCount")
     }
 

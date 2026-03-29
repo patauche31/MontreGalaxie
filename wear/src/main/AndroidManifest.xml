@@ -7,6 +7,10 @@
     <!-- Vibration pour confirmer un passage -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
+    <!-- Service en premier plan (Ongoing Activity cadran) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
     <!-- Déclarer que c'est une app Wear OS -->
     <uses-feature android:name="android.hardware.type.watch" />
 
@@ -29,6 +33,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".service.SwimTimerService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
     </application>
 

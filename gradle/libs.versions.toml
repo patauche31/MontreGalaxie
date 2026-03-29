@@ -14,6 +14,7 @@ composeFoundation    = "1.3.1"
 composeMaterial      = "1.3.1"
 composeNavigation    = "1.3.1"
 wearInput            = "1.1.0"
+wearOngoing          = "1.0.0"
 horologist           = "0.6.19"
 
 # Phone
@@ -40,6 +41,7 @@ wear-compose-foundation  = { group = "androidx.wear.compose", name = "compose-fo
 wear-compose-material    = { group = "androidx.wear.compose", name = "compose-material",   version.ref = "composeMaterial" }
 wear-compose-navigation  = { group = "androidx.wear.compose", name = "compose-navigation", version.ref = "composeNavigation" }
 wear-input               = { group = "androidx.wear",         name = "wear-input",          version.ref = "wearInput" }
+wear-ongoing             = { group = "androidx.wear",         name = "wear-ongoing",        version.ref = "wearOngoing" }
 horologist-compose-layout   = { group = "com.google.android.horologist", name = "horologist-compose-layout",   version.ref = "horologist" }
 horologist-compose-material = { group = "com.google.android.horologist", name = "horologist-compose-material", version.ref = "horologist" }
 splashscreen             = { group = "androidx.core",         name = "core-splashscreen",   version.ref = "splashscreen" }

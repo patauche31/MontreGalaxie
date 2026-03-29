@@ -20,7 +20,7 @@ android {
         applicationId = "com.piscine.timer"
         minSdk = 30          // Wear OS 3 minimum
         targetSdk = 34
-        versionCode = 1
+        versionCode = 2
         versionName = "1.0"
     }
 
@@ -87,6 +87,9 @@ dependencies {
 
     // Splash screen
     implementation(libs.splashscreen)
+
+    // Ongoing Activity (indicateur cadran pendant la nage)
+    implementation(libs.wear.ongoing)
 
     // Wearable Data Layer (sync avec app téléphone)
     implementation(libs.play.services.wearable)

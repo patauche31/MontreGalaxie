@@ -30,7 +30,8 @@ fun ReadyScreen(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 12.dp),
+                    .padding(horizontal = 12.dp)
+                    .padding(bottom = 56.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
@@ -85,16 +86,16 @@ fun ReadyScreen(
                 }
             }
 
-            // Bouton ⚙ Paramètres — coin bas-droit, bien visible (fond bleu opaque)
+            // Bouton ⚙ Paramètres — bas-centre, zone accessible sur écran rond
             CompactButton(
                 onClick  = onSettings,
                 colors   = ButtonDefaults.buttonColors(backgroundColor = Blue400),
                 modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(6.dp)
-                    .size(38.dp)
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 14.dp)
+                    .size(48.dp)
             ) {
-                Text("⚙", fontSize = 16.sp)
+                Text("⚙", fontSize = 18.sp)
             }
         }
     }
