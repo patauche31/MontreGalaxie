@@ -8,6 +8,7 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
+import com.piscine.timer.PiscineTimerApp
 import com.piscine.timer.service.SwimTimerService
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -21,17 +22,14 @@ import androidx.navigation.NavHostController
 import androidx.wear.compose.navigation.SwipeDismissableNavHost
 import androidx.wear.compose.navigation.composable
 import androidx.wear.compose.navigation.rememberSwipeDismissableNavController
-import com.piscine.timer.data.PreferencesManager
 import com.piscine.timer.data.db.SwimDatabase
 import com.piscine.timer.data.repository.SessionRepository
 import com.piscine.timer.data.sync.WearSyncManager
-import com.piscine.timer.domain.LapDetector
-import com.piscine.timer.domain.SensorLogger
-import com.piscine.timer.domain.SessionManager
 import com.piscine.timer.domain.StrokeCounter
 import com.piscine.timer.domain.model.PoolLength
 import com.piscine.timer.domain.model.SessionState
 import com.piscine.timer.presentation.screens.CustomLengthScreen
+import com.piscine.timer.presentation.screens.HistoryScreen
 import com.piscine.timer.presentation.screens.ReadyScreen
 import com.piscine.timer.presentation.screens.SettingsScreen
 import com.piscine.timer.presentation.screens.SummaryScreen
@@ -50,17 +48,14 @@ object Routes {
     const val SUMMARY       = "summary"
     const val SETTINGS      = "settings"
     const val CUSTOM_LENGTH = "custom_length"
+    const val HISTORY       = "history"
 }
 
 class MainActivity : ComponentActivity() {
 
-    private lateinit var sensorLogger  : SensorLogger
-    private lateinit var sessionManager: SessionManager
     private lateinit var navController : NavHostController
     private lateinit var sessionRepository: SessionRepository
-    private lateinit var prefs: PreferencesManager
 
-    private var lapDetector   : LapDetector?   = null
     private var strokeCounter : StrokeCounter? = null
     private var spmCollectJob : Job?           = null
 
@@ -71,8 +66,9 @@ class MainActivity : ComponentActivity() {
 
     /** Enregistre un lap en incluant le nombre de coups depuis le dernier lap */
     private fun recordLapWithStrokes() {
+        val app = application as PiscineTimerApp
         val strokes = strokeCounter?.getAndResetCount() ?: 0
-        sessionManager.recordLap(strokes)
+        app.sessionManager.recordLap(strokes)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -81,21 +77,23 @@ class MainActivity : ComponentActivity() {
         // Écran toujours allumé tant que l'app est au premier plan
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
+        val app = application as PiscineTimerApp
+        val sessionManager = app.sessionManager
+        val prefs = app.prefs
+
         val db = SwimDatabase.getInstance(applicationContext)
         sessionRepository = SessionRepository(db.sessionDao())
-        prefs = PreferencesManager(applicationContext)
-        sensorLogger   = SensorLogger(applicationContext)
-        sessionManager = SessionManager(
-            sensorLogger = if (prefs.debugLogging.value) sensorLogger else null
-        )
 
-        // ── Bloquer le bouton Back pendant la nage ─────────────────────────────
+        // ── Bouton Back pendant la nage = compter une longueur ────────────────
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 val state = sessionManager.session.value.state
-                if (state == SessionState.RUNNING || state == SessionState.PAUSED) {
-                    // Ignorer le Back pendant la nage — ne rien faire
-                    Log.d("MainActivity", "Back ignoré pendant la nage")
+                if (state == SessionState.RUNNING) {
+                    // Appui court bouton bas = passage manuel (backup détection auto)
+                    Log.d("MainActivity", "Back = lap manuel")
+                    recordLapWithStrokes()
+                } else if (state == SessionState.PAUSED) {
+                    // En pause : ignorer le back
                 } else {
                     isEnabled = false
                     onBackPressedDispatcher.onBackPressed()
@@ -118,6 +116,25 @@ class MainActivity : ComponentActivity() {
 
                 var lastCustomMeters by remember { mutableStateOf(prefs.lastCustomMeters) }
 
+                // ── Verrouillage écran (bloque bouton HOME pendant la nage) ──
+                LaunchedEffect(session.state) {
+                    when (session.state) {
+                        SessionState.RUNNING -> {
+                            try {
+                                startLockTask() // pin écran → HOME ne quitte plus l'app
+                            } catch (e: Exception) {
+                                android.util.Log.w("MainActivity", "startLockTask non disponible: ${e.message}")
+                            }
+                        }
+                        SessionState.PAUSED -> { /* conserver le pin pendant la pause */ }
+                        else -> {
+                            try {
+                                stopLockTask()
+                            } catch (e: Exception) { }
+                        }
+                    }
+                }
+
                 // ── Service Ongoing Activity (indicateur sur cadran) ──────────
                 LaunchedEffect(session.state) {
                     when (session.state) {
@@ -126,6 +143,7 @@ class MainActivity : ComponentActivity() {
                                 action = SwimTimerService.ACTION_START
                                 putExtra(SwimTimerService.EXTRA_ELAPSED, elapsedMs)
                                 putExtra(SwimTimerService.EXTRA_LAPS, session.lapCount)
+                                putExtra(SwimTimerService.EXTRA_POOL_LENGTH, session.poolLength.name)
                             })
                         SessionState.IDLE, SessionState.FINISHED ->
                             startService(Intent(this@MainActivity, SwimTimerService::class.java).apply {
@@ -143,38 +161,6 @@ class MainActivity : ComponentActivity() {
                             putExtra(SwimTimerService.EXTRA_ELAPSED, elapsedMs)
                             putExtra(SwimTimerService.EXTRA_LAPS, session.lapCount)
                         })
-                    }
-                }
-
-                // ── Cycle de vie LapDetector ──────────────────────────────────
-                LaunchedEffect(session.state, autoDetectOn) {
-                    when (session.state) {
-                        SessionState.RUNNING -> {
-                            if (autoDetectOn) {
-                                if (lapDetector == null) {
-                                    lapDetector = LapDetector(
-                                        context       = this@MainActivity,
-                                        poolLength    = session.poolLength,
-                                        logger        = if (prefs.debugLogging.value) sensorLogger else null,
-                                        onLapDetected = {
-                                            Log.d("LapDetector", "Virage détecté auto !")
-                                            recordLapWithStrokes()
-                                        }
-                                    )
-                                    lapDetector?.start()
-                                } else {
-                                    lapDetector?.resume()
-                                }
-                            } else {
-                                lapDetector?.stop()
-                                lapDetector = null
-                            }
-                        }
-                        SessionState.PAUSED -> lapDetector?.pause()
-                        SessionState.FINISHED, SessionState.IDLE -> {
-                            lapDetector?.stop()
-                            lapDetector = null
-                        }
                     }
                 }
 
@@ -238,6 +224,9 @@ class MainActivity : ComponentActivity() {
                             },
                             onSettings    = {
                                 navController.navigate(Routes.SETTINGS)
+                            },
+                            onHistory     = {
+                                navController.navigate(Routes.HISTORY)
                             }
                         )
                     }
@@ -263,11 +252,10 @@ class MainActivity : ComponentActivity() {
                             elapsedMs        = elapsedMs,
                             currentLapMs     = currentLap,
                             autoDetectActive = autoDetectOn &&
-                                               lapDetector?.isAvailable == true &&
                                                session.state == SessionState.RUNNING,
                             vibrationEnabled = vibrationOn,
                             currentSpm       = currentSpm,
-                            lapDetector      = lapDetector,
+                            lapDetector      = null,
                             swimStyle        = swimStyle,
                             onLap            = { recordLapWithStrokes() },
                             onTogglePause    = { sessionManager.togglePause() },
@@ -313,14 +301,43 @@ class MainActivity : ComponentActivity() {
                             onBack = { navController.popBackStack() }
                         )
                     }
+
+                    // ── Historique ────────────────────────────────────────────
+                    composable(Routes.HISTORY) {
+                        var sessions by remember { mutableStateOf(listOf<com.piscine.timer.data.db.SessionEntity>()) }
+                        LaunchedEffect(Unit) {
+                            sessions = sessionRepository.getRecentSessions(20)
+                        }
+                        HistoryScreen(
+                            sessions = sessions,
+                            onBack   = { navController.popBackStack() }
+                        )
+                    }
                 }
             }
         }
     }
 
+    override fun onPause() {
+        super.onPause()
+        val app = application as PiscineTimerApp
+        // Si session active et app envoyée en arrière-plan → ramener immédiatement
+        val state = app.sessionManager.session.value.state
+        if (state == SessionState.RUNNING) {
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                val intent = Intent(this, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                            Intent.FLAG_ACTIVITY_SINGLE_TOP
+                }
+                startActivity(intent)
+            }, 800L)
+        }
+    }
+
     override fun onResume() {
         super.onResume()
-        val state = sessionManager.session.value.state
+        val app = application as PiscineTimerApp
+        val state = app.sessionManager.session.value.state
         if ((state == SessionState.RUNNING || state == SessionState.PAUSED) &&
             ::navController.isInitialized &&
             navController.currentDestination?.route != Routes.SWIMMING) {
@@ -333,13 +350,14 @@ class MainActivity : ComponentActivity() {
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         val currentRoute = navController.currentDestination?.route
         if (currentRoute != Routes.SWIMMING) return super.onKeyDown(keyCode, event)
+        val app = application as PiscineTimerApp
         return when (keyCode) {
             KeyEvent.KEYCODE_STEM_1, 294 -> {
                 if (event?.repeatCount == 0) recordLapWithStrokes()
                 true
             }
             KeyEvent.KEYCODE_STEM_2, 295 -> {
-                sessionManager.finish()
+                app.sessionManager.finish()
                 navController.navigate(Routes.SUMMARY)
                 true
             }
@@ -349,9 +367,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        lapDetector?.stop()
         strokeCounter?.stop()
         spmCollectJob?.cancel()
-        sessionManager.clear()
+        val app = application as PiscineTimerApp
+        app.sessionManager.clear()
     }
 }

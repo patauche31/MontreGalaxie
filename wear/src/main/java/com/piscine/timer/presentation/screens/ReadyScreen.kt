@@ -22,7 +22,8 @@ fun ReadyScreen(
     onStart25m: () -> Unit,
     onStart50m: () -> Unit,
     onStartCustom: () -> Unit = {},
-    onSettings: () -> Unit = {}
+    onSettings: () -> Unit = {},
+    onHistory: () -> Unit = {}
 ) {
     Scaffold(timeText = { TimeText() }) {
         Box(modifier = Modifier.fillMaxSize()) {
@@ -86,13 +87,25 @@ fun ReadyScreen(
                 }
             }
 
-            // Bouton ⚙ Paramètres — bas-centre, zone accessible sur écran rond
+            // Bouton 📋 Historique — bas-gauche
+            CompactButton(
+                onClick  = onHistory,
+                colors   = ButtonDefaults.buttonColors(backgroundColor = Cyan300),
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 18.dp, bottom = 14.dp)
+                    .size(48.dp)
+            ) {
+                Text("📋", fontSize = 16.sp)
+            }
+
+            // Bouton ⚙ Paramètres — bas-droite
             CompactButton(
                 onClick  = onSettings,
                 colors   = ButtonDefaults.buttonColors(backgroundColor = Blue400),
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 14.dp)
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 18.dp, bottom = 14.dp)
                     .size(48.dp)
             ) {
                 Text("⚙", fontSize = 18.sp)

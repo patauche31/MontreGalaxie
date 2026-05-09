@@ -14,30 +14,26 @@ import com.piscine.timer.domain.model.PoolLength
 import kotlin.math.sqrt
 
 /**
- * Détection automatique des virages — algorithme basé sur la COULÉE.
+ * Détection automatique des virages — algorithme double capteur.
  *
- * Observation clé des données CSV réelles (Galaxy Watch 5 Pro, dos crawlé 25m) :
+ * Données réelles CSV (Galaxy Watch 5 Pro, dos crawlé 25m) :
  * ┌─────────────────────────────────────────────────────────────────────────┐
- * │  Pendant la nage      : événements accéléromètre toutes les ~20ms       │
- * │  Pendant la coulée    : GAP DE 8-10 SECONDES sans aucun événement       │
- * │  → L'OS Wear OS coupe le capteur quand il détecte l'immobilité          │
+ * │  Au virage (demi-tour) :                                                │
+ * │    1. Rotation gyroscope élevée  (demi-tour corps : 2–8 rad/s)         │
+ * │    2. Suivi d'un pic accéléro    (push-off mur   : 8–20 m/s²)          │
+ * │                                                                         │
+ * │  Pendant la nage normale :                                              │
+ * │    Rotation : 0.5–1.5 rad/s  (roulis de nage)                          │
+ * │    Accéléro : 0.5–10 m/s²   (coups de bras)                            │
  * └─────────────────────────────────────────────────────────────────────────┘
  *
- * Pattern détecté au virage (extrait CSV) :
- *   t=43147ms  acc=14.5 m/s²  ← push-off mur (pic énorme)
- *   t=43550ms  acc=5.3        ← dernier event avant coulée
- *   [ ---- GAP 10.7 secondes AUCUN EVENT ---- ]  ← COULÉE détectée ici
- *   t=54259ms  acc=8.3        ← bras reprend, nage continue
- *
  * Algorithme :
- *   1. Chaque event accéléromètre → reschedule un Runnable à +COULE_SILENCE_MS
- *   2. Si le Runnable se déclenche (= silence ≥ 2s) ET qu'un pic récent existait
- *      → virage validé ✅
+ *   1. Gyroscope détecte rotation > ROTATION_THRESHOLD  → "pré-virage" mémorisé
+ *   2. Dans les ROTATION_WINDOW_MS suivants, si accéléro > PUSH_THRESHOLD
+ *      ET cooldown minLapMs respecté → virage validé ✅
  *
- * Avantages vs approche rotation :
- *   ✓ Aucun gyroscope nécessaire (moins de batterie)
- *   ✓ Robuste aux virages dos ouverts (pas de culbute)
- *   ✓ Basé sur comportement OS réel mesuré
+ * Avantage : les coups de bras forts ne déclenchent pas de faux positifs
+ * car ils ne sont pas précédés d'une rotation de demi-tour.
  */
 class LapDetector(
     context: Context,
@@ -49,65 +45,65 @@ class LapDetector(
     companion object {
         private const val TAG = "LapDetector"
 
-        /** Seuil push-off (m/s²). Push-off réel = 10-15. Nage normale = 5-9. */
-        const val PUSH_THRESHOLD     = 5.0f
+        /**
+         * Seuil rotation gyroscope (rad/s).
+         * Demi-tour dos crawlé : 2–8 rad/s.
+         * Roulis nage normale  : 0.5–1.5 rad/s.
+         */
+        const val ROTATION_THRESHOLD = 3.5f
 
-        /** Durée de silence capteur pour déclarer une coulée (ms).
-         *  Données réelles : gaps de 1.5-5s après push-off. 1500ms = bon compromis. */
-        const val COULE_SILENCE_MS   = 1500L
+        /**
+         * Seuil push-off accéléromètre (m/s²).
+         * Push-off mur : 8–20 m/s².
+         * Coup de bras : 0.5–10 m/s².
+         */
+        const val PUSH_THRESHOLD = 8.0f
 
-        /** Le dernier pic doit être survenu ≤ X ms avant le début du silence. */
-        const val PUSH_BEFORE_GAP_MS = 3000L
+        /**
+         * Fenêtre après la rotation pour attendre le push-off (ms).
+         * Le demi-tour se fait ~0.5–2s avant le push-off.
+         */
+        const val ROTATION_WINDOW_MS = 3_000L
 
-        /** Après une détection auto, bloquer les taps manuels pendant X ms (anti double-compte) */
-        const val POST_DETECT_LOCKOUT_MS = 4000L
+        /** Après détection, bloquer les taps manuels X ms (anti double-compte) */
+        const val POST_DETECT_LOCKOUT_MS = 4_000L
     }
 
-    // ── Durée minimum entre deux laps ────────────────────────────────────────
+    // ── Durée minimum entre deux virages ─────────────────────────────────────
     private val minLapMs: Long = when (poolLength) {
-        PoolLength.POOL_25     -> 15_000L  // 15s min (données réelles : ~18s pour 25m rapide)
-        PoolLength.POOL_50     -> 35_000L  // 35s min (nageur loisir rapide)
-        PoolLength.POOL_CUSTOM -> 12_000L
+        PoolLength.POOL_25     -> 65_000L   // 65s — données réelles 26/04/2026
+        PoolLength.POOL_50     -> 70_000L
+        PoolLength.POOL_CUSTOM -> 30_000L
     }
 
-    // ── État interne ─────────────────────────────────────────────────────────
-    private var isActive        = false
-    private var lastEventMs     = 0L   // timestamp du dernier événement capteur
-    private var lastPeakMs      = 0L   // timestamp du dernier pic > PUSH_THRESHOLD
-    private var lastDetectionMs = 0L   // timestamp du dernier virage validé
+    // ── État interne ──────────────────────────────────────────────────────────
+    private var isActive          = false
+    private var lastDetectionMs   = 0L    // timestamp du dernier virage validé
+    private var lastRotationMs    = 0L    // timestamp de la dernière rotation élevée
+    private var inAccPeak         = false // évite de compter plusieurs fois le même pic
 
-    /** True pendant POST_DETECT_LOCKOUT_MS après une détection auto — bloque les taps manuels */
+    /** True pendant POST_DETECT_LOCKOUT_MS après une détection — bloque les taps manuels */
     val isInLockout: Boolean
         get() = System.currentTimeMillis() - lastDetectionMs < POST_DETECT_LOCKOUT_MS
 
-    // ── Handler – détecte le silence capteur (coulée) ────────────────────────
+    // ── Handler – expire la fenêtre de rotation ───────────────────────────────
     private val handler = Handler(Looper.getMainLooper())
-    private val couleeRunnable = Runnable {
-        val nowMs           = System.currentTimeMillis()
-        val silenceDuration = nowMs - lastEventMs
-        val peakBeforeGap   = lastEventMs - lastPeakMs   // temps entre dernier pic et début silence
-
-        Log.d(TAG, "🕵️ Coulée check: silence=${silenceDuration}ms, picAvantGap=${peakBeforeGap}ms")
-        logger?.event("COULE_CHECK silence=${silenceDuration}ms peakAge=${peakBeforeGap}ms")
-
-        if (silenceDuration >= COULE_SILENCE_MS &&
-            lastPeakMs > 0 &&
-            peakBeforeGap <= PUSH_BEFORE_GAP_MS &&
-            nowMs - lastDetectionMs >= minLapMs
-        ) {
-            logger?.event("LAP_AUTO coulée=${silenceDuration}ms")
-            Log.d(TAG, "🏊 VIRAGE COULÉE validé! silence=${silenceDuration}ms après pic +${peakBeforeGap}ms")
-            triggerLap(nowMs)
+    private val rotationExpireRunnable = Runnable {
+        if (lastRotationMs > 0L) {
+            Log.v(TAG, "⏳ Fenêtre rotation expirée sans push-off")
+            lastRotationMs = 0L
         }
     }
 
-    // ── Capteurs ─────────────────────────────────────────────────────────────
+    // ── Capteurs ──────────────────────────────────────────────────────────────
     private val sensorManager: SensorManager =
         context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
 
-    // TYPE_LINEAR_ACCELERATION = accélération sans gravité → ~0 quand vraiment immobile
     private val linearAccSensor: Sensor? =
         sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
+
+    private val gyroSensor: Sensor? =
+        sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
 
     @Suppress("DEPRECATION")
     private val vibrator: Vibrator =
@@ -115,63 +111,94 @@ class LapDetector(
 
     val isAvailable: Boolean get() = linearAccSensor != null
 
-    // ── SensorEventListener ──────────────────────────────────────────────────
+    // ── SensorEventListener ───────────────────────────────────────────────────
     override fun onSensorChanged(event: SensorEvent) {
-        if (!isActive || event.sensor.type != Sensor.TYPE_LINEAR_ACCELERATION) return
-        handleAccelerometer(event, System.currentTimeMillis())
+        if (!isActive) return
+        val nowMs = System.currentTimeMillis()
+
+        when (event.sensor.type) {
+
+            Sensor.TYPE_GYROSCOPE -> {
+                val rot = sqrt(
+                    event.values[0] * event.values[0] +
+                    event.values[1] * event.values[1] +
+                    event.values[2] * event.values[2]
+                )
+                // Log TOUTES les rotations > 1 rad/s pour calibration
+                if (rot > 1.0f) {
+                    logger?.event("GYR rot=${"%.2f".format(rot)}rad/s")
+                }
+                if (rot > ROTATION_THRESHOLD) {
+                    val cooldownOk = nowMs - lastDetectionMs >= minLapMs
+                    if (cooldownOk && lastRotationMs == 0L) {
+                        // Nouvelle rotation détectée → ouvre la fenêtre push-off
+                        lastRotationMs = nowMs
+                        inAccPeak      = false
+                        Log.v(TAG, "🔄 Rotation détectée : ${"%.1f".format(rot)} rad/s → attente push-off")
+                        // Si pas de push-off dans ROTATION_WINDOW_MS → réinitialiser
+                        handler.removeCallbacks(rotationExpireRunnable)
+                        handler.postDelayed(rotationExpireRunnable, ROTATION_WINDOW_MS)
+                    }
+                }
+            }
+
+            Sensor.TYPE_LINEAR_ACCELERATION -> {
+                val acc = sqrt(
+                    event.values[0] * event.values[0] +
+                    event.values[1] * event.values[1] +
+                    event.values[2] * event.values[2]
+                )
+
+                // Log données brutes
+                logger?.log(
+                    ax        = event.values[0],
+                    ay        = event.values[1],
+                    az        = event.values[2],
+                    magnitude = acc,
+                    smoothed  = acc,
+                    event     = ""
+                )
+
+                if (acc > PUSH_THRESHOLD) {
+                    if (!inAccPeak) {
+                        inAccPeak = true
+                        val rotationRecent = lastRotationMs > 0L &&
+                                             nowMs - lastRotationMs <= ROTATION_WINDOW_MS
+                        val cooldownOk     = nowMs - lastDetectionMs >= minLapMs
+
+                        if (rotationRecent && cooldownOk) {
+                            // Rotation + push-off = virage confirmé ✅
+                            handler.removeCallbacks(rotationExpireRunnable)
+                            logger?.event("LAP_AUTO rot+push acc=${"%.1f".format(acc)}m/s2 cooldown=${nowMs - lastDetectionMs}ms")
+                            Log.d(TAG, "🏊 VIRAGE confirmé! rotation + push ${"%.1f".format(acc)} m/s²")
+                            lastRotationMs = 0L
+                            triggerLap(nowMs)
+                        } else if (!rotationRecent && cooldownOk) {
+                            Log.v(TAG, "💪 Pic ${"%.1f".format(acc)} m/s² sans rotation préalable → ignoré")
+                        }
+                    }
+                } else {
+                    inAccPeak = false
+                }
+            }
+        }
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
 
-    // ── Traitement accéléromètre ──────────────────────────────────────────────
-    private fun handleAccelerometer(event: SensorEvent, nowMs: Long) {
-        val acc = sqrt(
-            event.values[0] * event.values[0] +
-            event.values[1] * event.values[1] +
-            event.values[2] * event.values[2]
-        )
-
-        // Log données brutes
-        logger?.log(
-            ax        = event.values[0],
-            ay        = event.values[1],
-            az        = event.values[2],
-            magnitude = acc,
-            smoothed  = acc,
-            event     = ""
-        )
-
-        // Mise à jour timestamp dernier événement
-        lastEventMs = nowMs
-
-        // Détection pic push-off / mouvement vigoureux
-        if (acc > PUSH_THRESHOLD) {
-            lastPeakMs = nowMs
-            Log.v(TAG, "💪 Pic acc=${"%.1f".format(acc)} m/s²")
-        }
-
-        // Reschedule détection coulée : si aucun event d'ici COULE_SILENCE_MS → virage
-        handler.removeCallbacks(couleeRunnable)
-        val cooldownOk = nowMs - lastDetectionMs >= minLapMs
-        if (lastPeakMs > 0 && cooldownOk) {
-            handler.postDelayed(couleeRunnable, COULE_SILENCE_MS)
-        }
-    }
-
     // ── Déclenchement virage ──────────────────────────────────────────────────
     private fun triggerLap(nowMs: Long) {
         lastDetectionMs = nowMs
-        lastPeakMs      = 0L
         vibrate()
         onLapDetected()
     }
 
-    /** Vibration 2 impulsions courtes — confirmation virage */
+    /** Vibration forte — 1 longue impulsion bien perceptible sous l'eau */
     private fun vibrate() {
         vibrator.vibrate(
             VibrationEffect.createWaveform(
-                longArrayOf(0, 80, 60, 80),
-                intArrayOf(0, VibrationEffect.DEFAULT_AMPLITUDE, 0, VibrationEffect.DEFAULT_AMPLITUDE),
+                longArrayOf(0, 400, 100, 200),
+                intArrayOf(0, 255, 0, 255),
                 -1
             )
         )
@@ -184,31 +211,40 @@ class LapDetector(
             return
         }
         isActive        = true
-        lastEventMs     = System.currentTimeMillis()
-        lastPeakMs      = 0L
+        inAccPeak       = false
+        lastRotationMs  = 0L
         lastDetectionMs = System.currentTimeMillis()
+
         sensorManager.registerListener(this, linearAccSensor, SensorManager.SENSOR_DELAY_GAME)
-        Log.d(TAG, "Démarré — minLap=${minLapMs/1000}s | push>${PUSH_THRESHOLD} | silence>${COULE_SILENCE_MS}ms")
+        gyroSensor?.let {
+            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
+        }
+
+        Log.d(TAG, "Démarré — minLap=${minLapMs/1000}s | rot>${ROTATION_THRESHOLD}rad/s | push>${PUSH_THRESHOLD}m/s²")
     }
 
     fun pause() {
-        isActive = false
-        handler.removeCallbacks(couleeRunnable)
+        isActive       = false
+        lastRotationMs = 0L
+        inAccPeak      = false
+        handler.removeCallbacks(rotationExpireRunnable)
         Log.d(TAG, "Pause")
     }
 
     fun resume() {
         if (!isAvailable) return
         isActive        = true
-        lastEventMs     = System.currentTimeMillis()
-        lastPeakMs      = 0L
+        inAccPeak       = false
+        lastRotationMs  = 0L
         lastDetectionMs = System.currentTimeMillis()
         Log.d(TAG, "Reprise")
     }
 
     fun stop() {
-        isActive = false
-        handler.removeCallbacks(couleeRunnable)
+        isActive       = false
+        inAccPeak      = false
+        lastRotationMs = 0L
+        handler.removeCallbacks(rotationExpireRunnable)
         sensorManager.unregisterListener(this)
         Log.d(TAG, "Arrêté")
     }
