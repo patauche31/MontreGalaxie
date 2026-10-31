@@ -19,7 +19,7 @@ android {
     defaultConfig {
         applicationId = "com.piscine.timer"
         minSdk = 30          // Wear OS 3 minimum
-        targetSdk = 34
+        targetSdk = 35          // minimum exigé par Google Play pour Wear OS
         versionCode = 2
         versionName = "1.0"
     }
@@ -68,10 +68,6 @@ dependencies {
     implementation(libs.wear.compose.navigation)
     implementation(libs.wear.input)
 
-    // Horologist
-    implementation(libs.horologist.compose.layout)
-    implementation(libs.horologist.compose.material)
-
     // Lifecycle / ViewModel
     implementation(libs.lifecycle.viewmodel.ktx)
     implementation(libs.lifecycle.viewmodel.compose)
@@ -90,6 +86,9 @@ dependencies {
 
     // Ongoing Activity (indicateur cadran pendant la nage)
     implementation(libs.wear.ongoing)
+
+    // Mode ambient / always-on (écran jamais éteint pendant la nage)
+    implementation(libs.wear)
 
     // Wearable Data Layer (sync avec app téléphone)
     implementation(libs.play.services.wearable)

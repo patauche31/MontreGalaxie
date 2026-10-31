@@ -14,12 +14,12 @@ val keystoreProps = Properties().apply {
 
 android {
     namespace   = "com.piscine.timer.phone"
-    compileSdk  = 35
+    compileSdk  = 36
 
     defaultConfig {
         applicationId  = "com.piscine.timer"
         minSdk         = 26
-        targetSdk      = 34
+        targetSdk      = 36     // minimum exigé par Google Play pour le mobile
         versionCode    = 1
         versionName    = "1.0"
     }
@@ -73,6 +73,8 @@ dependencies {
 
     // Wearable Data Layer
     implementation(libs.play.services.wearable)
+    // await() sur les Task du Data Layer (envoi des suppressions vers la montre)
+    implementation(libs.kotlinx.coroutines.play.services)
 
     // Graphiques (MPAndroidChart)
     implementation(libs.mpandroidchart)
