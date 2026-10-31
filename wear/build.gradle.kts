@@ -25,18 +25,20 @@ android {
     }
 
     signingConfigs {
-        create("release") {
-            storeFile     = file(keystoreProps["storeFile"] as String)
-            storePassword = keystoreProps["storePassword"] as String
-            keyAlias      = keystoreProps["keyAlias"] as String
-            keyPassword   = keystoreProps["keyPassword"] as String
+        if (keystoreProps["storeFile"] != null) {
+            create("release") {
+                storeFile     = file(keystoreProps["storeFile"] as String)
+                storePassword = keystoreProps["storePassword"] as String
+                keyAlias      = keystoreProps["keyAlias"] as String
+                keyPassword   = keystoreProps["keyPassword"] as String
+            }
         }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = true
-            signingConfig   = signingConfigs.getByName("release")
+            signingConfig   = signingConfigs.findByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
